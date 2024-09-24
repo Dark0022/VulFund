@@ -1,0 +1,87 @@
+import requests
+from bs4 import BeautifulSoup
+
+# List of domains to whitelist
+WHITELIST_DOMAINS = ["google.com", "facebook.com"]
+
+def get_domain(url):
+    # Extract domain from URL
+    return url.split("//")[-1].split("/")[0]
+
+def analyze_page(url):
+    vulnerabilities = []
+
+    domain = get_domain(url)
+    if domain in WHITELIST_DOMAINS:
+        vulnerabilities.append(f"{domain} is in the whitelist, skipping detailed vulnerability scan.")
+        return vulnerabilities
+
+    try:
+        response = requests.get(url)
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+        # Check for XSS (High Risk)
+        if soup.find_all('script'):
+            vulnerabilities.append("[High] Potential XSS vulnerability: script tags found.")
+
+        # SQL Injection Check (High Risk)
+        forms = soup.find_all('form')
+        for form in forms:
+            action = form.get('action', '')
+            if any(char in action for char in ["'", ";", "--"]):
+                vulnerabilities.append("[High] Potential SQL Injection risk in form action URL.")
+
+            # CSRF Check (Medium Risk)
+            if form.get('method', '').lower() == "post" and not form.find('input', {'name': 'csrf_token'}):
+                vulnerabilities.append("[Medium] Potential CSRF risk: missing CSRF token in POST form.")
+
+        # Open Redirect Check (Medium Risk)
+        links = soup.find_all('a')
+        for link in links:
+            href = link.get('href', '')
+            if "redirect" in href:
+                vulnerabilities.append("[Medium] Potential Open Redirect found.")
+
+        # Insecure Cookie Check (Low Risk)
+        if response.cookies:
+            for cookie in response.cookies:
+                if not cookie.has_nonstandard_attr('HttpOnly'):
+                    vulnerabilities.append(f"[Low] Cookie '{cookie.name}' is missing HttpOnly flag.")
+                if not cookie.has_nonstandard_attr('Secure') and response.url.startswith("https"):
+                    vulnerabilities.append(f"[Low] Cookie '{cookie.name}' is missing Secure flag.")
+
+        # Sensitive Path Check (High Risk)
+        sensitive_paths = ['/admin', '/config', '/backup']
+        for path in sensitive_paths:
+            if requests.head(url + path).status_code == 200:
+                vulnerabilities.append(f"[High] Sensitive path found: {url + path}")
+
+        # Check for Security Headers (Medium Risk)
+        response_headers = response.headers
+        if 'X-Frame-Options' not in response_headers:
+            vulnerabilities.append("[Medium] Missing X-Frame-Options header.")
+        if 'Content-Security-Policy' not in response_headers:
+            vulnerabilities.append("[Medium] Missing Content Security Policy header.")
+
+        return vulnerabilities or ["No vulnerabilities found."]
+
+    except Exception as e:
+        return [f"Error: {str(e)}"]
+
+def chatbot():
+    print("Chatbot is ready! Type 'exit' to quit.")
+    while True:
+        user_input = input("You: ")
+        if user_input.lower() == "exit":
+            break
+        elif user_input.lower().startswith("scan "):
+            url = user_input.split("scan ", 1)[1].strip()
+            results = analyze_page(url)
+            for result in results:
+                print("Bot:", result)
+        else:
+            print("Bot: You can ask me to 'scan [URL]' to check for vulnerabilities.")
+
+# Run the chatbot
+if __name__ == "__main__":
+    chatbot()
