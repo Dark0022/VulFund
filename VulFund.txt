@@ -1,68 +1,96 @@
 import requests
 from bs4 import BeautifulSoup
+import asyncio
+import aiohttp
+import json
 
 # List of domains to whitelist
 WHITELIST_DOMAINS = {"google.com", "facebook.com"}
 
-def get_domain(url):
-    # Extract domain from URL
-    return url.split("//")[-1].split("/")[0]
+class VulnerabilityScanner:
+    def __init__(self, url):
+        self.url = url
+        self.vulnerabilities = []
 
-def analyze_page(url):
-    vulnerabilities = []
+    def get_domain(self):
+        return self.url.split("//")[-1].split("/")[0]
 
-    domain = get_domain(url)
-    if domain in WHITELIST_DOMAINS:
-        vulnerabilities.append(f"{domain} is in the whitelist, skipping detailed vulnerability scan.")
-        return vulnerabilities
+    async def fetch(self, session, url):
+        async with session.get(url) as response:
+            return await response.text(), response.cookies, response.headers
 
-    try:
-        response = requests.get(url)
-        soup = BeautifulSoup(response.text, 'html.parser')
+    async def analyze_page(self):
+        domain = self.get_domain()
+        if domain in WHITELIST_DOMAINS:
+            self.vulnerabilities.append(f"{domain} is in the whitelist, skipping detailed vulnerability scan.")
+            return self.vulnerabilities
 
-        # Check for vulnerabilities
+        async with aiohttp.ClientSession() as session:
+            try:
+                page_content, cookies, headers = await self.fetch(session, self.url)
+                soup = BeautifulSoup(page_content, 'html.parser')
+
+                # Check for vulnerabilities
+                self.check_xss(soup)
+                self.check_sql_injection(soup)
+                self.check_csrf(soup)
+                self.check_open_redirect(soup)
+                self.check_insecure_cookies(cookies)
+                await self.check_sensitive_paths(session)
+                self.check_security_headers(headers)
+
+                return self.vulnerabilities or ["No vulnerabilities found."]
+
+            except Exception as e:
+                self.vulnerabilities.append(f"Error: {str(e)}")
+                return self.vulnerabilities
+
+    def check_xss(self, soup):
         if soup.find_all('script'):
-            vulnerabilities.append("[High] Potential XSS vulnerability: script tags found.")
+            self.vulnerabilities.append("[High] Potential XSS vulnerability: script tags found.")
 
+    def check_sql_injection(self, soup):
         forms = soup.find_all('form')
         for form in forms:
             action = form.get('action', '')
             if any(char in action for char in ["'", ";", "--"]):
-                vulnerabilities.append("[High] Potential SQL Injection risk in form action URL.")
-            if form.get('method', '').lower() == "post" and not form.find('input', {'name': 'csrf_token'}):
-                vulnerabilities.append("[Medium] Potential CSRF risk: missing CSRF token in POST form.")
+                self.vulnerabilities.append("[High] Potential SQL Injection risk in form action URL.")
 
+    def check_csrf(self, soup):
+        forms = soup.find_all('form')
+        for form in forms:
+            if form.get('method', '').lower() == "post" and not form.find('input', {'name': 'csrf_token'}):
+                self.vulnerabilities.append("[Medium] Potential CSRF risk: missing CSRF token in POST form.")
+
+    def check_open_redirect(self, soup):
         links = soup.find_all('a')
         if any("redirect" in link.get('href', '') for link in links):
-            vulnerabilities.append("[Medium] Potential Open Redirect found.")
+            self.vulnerabilities.append("[Medium] Potential Open Redirect found.")
 
-        # Insecure Cookie Check
-        for cookie in response.cookies:
+    def check_insecure_cookies(self, cookies):
+        for cookie in cookies:
             if not cookie.has_nonstandard_attr('HttpOnly'):
-                vulnerabilities.append(f"[Low] Cookie '{cookie.name}' is missing HttpOnly flag.")
-            if not cookie.has_nonstandard_attr('Secure') and response.url.startswith("https"):
-                vulnerabilities.append(f"[Low] Cookie '{cookie.name}' is missing Secure flag.")
+                self.vulnerabilities.append(f"[Low] Cookie '{cookie.name}' is missing HttpOnly flag.")
+            if not cookie.has_nonstandard_attr('Secure') and self.url.startswith("https"):
+                self.vulnerabilities.append(f"[Low] Cookie '{cookie.name}' is missing Secure flag.")
 
-        # Sensitive Path Check
+    async def check_sensitive_paths(self, session):
         sensitive_paths = ['/admin', '/config', '/backup']
         for path in sensitive_paths:
-            if requests.head(url + path).status_code == 200:
-                vulnerabilities.append(f"[High] Sensitive path found: {url + path}")
+            head_url = self.url + path
+            async with session.head(head_url) as response:
+                if response.status == 200:
+                    self.vulnerabilities.append(f"[High] Sensitive path found: {head_url}")
 
-        # Check for Security Headers
+    def check_security_headers(self, headers):
         missing_headers = []
-        if 'X-Frame-Options' not in response.headers:
+        if 'X-Frame-Options' not in headers:
             missing_headers.append("X-Frame-Options")
-        if 'Content-Security-Policy' not in response.headers:
+        if 'Content-Security-Policy' not in headers:
             missing_headers.append("Content Security Policy")
 
         if missing_headers:
-            vulnerabilities.append(f"[Medium] Missing headers: {', '.join(missing_headers)}.")
-
-        return vulnerabilities or ["No vulnerabilities found."]
-
-    except Exception as e:
-        return [f"Error: {str(e)}"]
+            self.vulnerabilities.append(f"[Medium] Missing headers: {', '.join(missing_headers)}.")
 
 def chatbot():
     print("Chatbot is ready! Type 'exit' to quit.")
@@ -72,7 +100,8 @@ def chatbot():
             break
         elif user_input.lower().startswith("scan "):
             url = user_input.split("scan ", 1)[1].strip()
-            results = analyze_page(url)
+            scanner = VulnerabilityScanner(url)
+            results = asyncio.run(scanner.analyze_page())
             for result in results:
                 print("Bot:", result)
         else:
