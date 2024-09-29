@@ -3,13 +3,19 @@ from bs4 import BeautifulSoup
 import asyncio
 import aiohttp
 import json
+import time
+import logging
+
+# Setup logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # List of domains to whitelist
 WHITELIST_DOMAINS = {"google.com", "facebook.com"}
 
 class VulnerabilityScanner:
-    def __init__(self, url):
+    def __init__(self, url, session=None):
         self.url = url
+        self.session = session or requests.Session()
         self.vulnerabilities = []
 
     def get_domain(self):
@@ -92,6 +98,17 @@ class VulnerabilityScanner:
         if missing_headers:
             self.vulnerabilities.append(f"[Medium] Missing headers: {', '.join(missing_headers)}.")
 
+    def save_results(self, output_format='text'):
+        if output_format == 'json':
+            with open('scan_results.json', 'w') as f:
+                json.dump(self.vulnerabilities, f, indent=4)
+            logging.info("Results saved to scan_results.json")
+        else:
+            with open('scan_results.txt', 'w') as f:
+                for vulnerability in self.vulnerabilities:
+                    f.write(vulnerability + '\n')
+            logging.info("Results saved to scan_results.txt")
+
 def chatbot():
     print("Chatbot is ready! Type 'exit' to quit.")
     while True:
@@ -104,6 +121,7 @@ def chatbot():
             results = asyncio.run(scanner.analyze_page())
             for result in results:
                 print("Bot:", result)
+            scanner.save_results(output_format='json')  # Save results as JSON
         else:
             print("Bot: You can ask me to 'scan [URL]' to check for vulnerabilities.")
 
