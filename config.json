@@ -1,0 +1,10 @@
+{
+    "check_xss": true,
+    "check_sql_injection": true,
+    "check_csrf": true,
+    "check_open_redirect": true,
+    "check_insecure_cookies": true,
+    "check_sensitive_paths": true,
+    "check_security_headers": true,
+    "directory_brute_force": true
+}
