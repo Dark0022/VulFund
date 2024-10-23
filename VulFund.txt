@@ -1,27 +1,71 @@
-import requests
+import asyncio
+import aiohttp
+import json
+import logging
 from bs4 import BeautifulSoup
+import os
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # List of domains to whitelist
-WHITELIST_DOMAINS = ["google.com", "facebook.com"]
+WHITELIST_DOMAINS = {"google.com", "facebook.com"}
 
-def get_domain(url):
-    # Extract domain from URL
-    return url.split("//")[-1].split("/")[0]
+class VulnerabilityScanner:
+    def __init__(self, url, options=None):
+        self.url = url
+        self.vulnerabilities = []
+        self.options = options or {}
+        self.session = None
 
-def analyze_page(url):
-    vulnerabilities = []
+    def get_domain(self):
+        return self.url.split("//")[-1].split("/")[0]
 
-    domain = get_domain(url)
-    if domain in WHITELIST_DOMAINS:
-        vulnerabilities.append(f"{domain} is in the whitelist, skipping detailed vulnerability scan.")
-        return vulnerabilities
+    async def fetch(self, session, url):
+        try:
+            async with session.get(url) as response:
+                return await response.text(), response.cookies, response.headers
+        except Exception as e:
+            logging.error(f"Failed to fetch {url}: {e}")
+            return None, None, None
 
-    try:
-        response = requests.get(url)
-        soup = BeautifulSoup(response.text, 'html.parser')
+    async def analyze_page(self):
+        domain = self.get_domain()
+        if domain in WHITELIST_DOMAINS:
+            self.vulnerabilities.append(f"{domain} is in the whitelist, skipping detailed vulnerability scan.")
+            return self.vulnerabilities
 
-        # Check for XSS (High Risk)
+        async with aiohttp.ClientSession() as session:
+            self.session = session
+            page_content, cookies, headers = await self.fetch(session, self.url)
+
+            if page_content is None:
+                return ["Failed to fetch the page content."]
+
+            soup = BeautifulSoup(page_content, 'html.parser')
+
+            if self.options.get("check_xss"):
+                self.check_xss(soup)
+            if self.options.get("check_sql_injection"):
+                self.check_sql_injection(soup)
+            if self.options.get("check_csrf"):
+                self.check_csrf(soup)
+            if self.options.get("check_open_redirect"):
+                self.check_open_redirect(soup)
+            if self.options.get("check_insecure_cookies"):
+                self.check_insecure_cookies(cookies)
+            if self.options.get("check_sensitive_paths"):
+                await self.check_sensitive_paths()
+            if self.options.get("check_security_headers"):
+                self.check_security_headers(headers)
+            if self.options.get("directory_brute_force"):
+                await self.directory_brute_force()
+
+            return self.vulnerabilities or ["No vulnerabilities found."]
+
+    def check_xss(self, soup):
         if soup.find_all('script'):
+HEAD
             vulnerabilities.append("[High] Potential XSS vulnerability: script tags found.")
 
 import requests
@@ -83,6 +127,10 @@ class VulnerabilityScanner:
         if soup.find_all('script'):
             self.vulnerabilities.append("[High] Potential XSS vulnerability: script tags found.")
 
+
+            self.vulnerabilities.append("[High] Potential XSS vulnerability: script tags found.")
+    
+ afbf2681f1fe7dadee858df486522398e998ff9c
     def check_sql_injection(self, soup):
         forms = soup.find_all('form')
         for form in forms:
@@ -108,6 +156,7 @@ class VulnerabilityScanner:
             if not cookie.has_nonstandard_attr('Secure') and self.url.startswith("https"):
                 self.vulnerabilities.append(f"[Low] Cookie '{cookie.name}' is missing Secure flag.")
 
+ HEAD
     async def check_sensitive_paths(self, session):
         sensitive_paths = ['/admin', '/config', '/backup']
         for path in sensitive_paths:
@@ -127,12 +176,56 @@ class VulnerabilityScanner:
             self.vulnerabilities.append(f"[Medium] Missing headers: {', '.join(missing_headers)}.")
 
     def generate_report(self):
+
+    async def check_sensitive_paths(self):
+        sensitive_paths = ['/admin', '/config', '/backup']
+        tasks = [self.fetch(self.session, self.url + path) for path in sensitive_paths]
+        responses = await asyncio.gather(*tasks)
+
+        for path, (page_content, _, _) in zip(sensitive_paths, responses):
+            if page_content and "200" in page_content:  # Placeholder for actual status check
+                self.vulnerabilities.append(f"[High] Sensitive path found: {self.url + path}")
+
+    def check_security_headers(self, headers):
+        missing_headers = []
+        if 'X-Frame-Options' not in headers:
+            missing_headers.append("X-Frame-Options")
+        if 'Content-Security-Policy' not in headers:
+            missing_headers.append("Content Security Policy")
+        if missing_headers:
+            self.vulnerabilities.append(f"[Medium] Missing headers: {', '.join(missing_headers)}.")
+
+    async def directory_brute_force(self):
+        # Placeholder: Implement directory and file enumeration logic
+        common_dirs = ['admin/', 'uploads/', 'config/']
+        tasks = [self.fetch(self.session, self.url + dir) for dir in common_dirs]
+        responses = await asyncio.gather(*tasks)
+
+        for dir, (page_content, _, _) in zip(common_dirs, responses):
+            if page_content and "200" in page_content:  # Placeholder for actual status check
+                self.vulnerabilities.append(f"[High] Directory found: {self.url + dir}")
+
+    def generate_report(self, format='json'):
+ afbf2681f1fe7dadee858df486522398e998ff9c
         report = {
             "url": self.url,
             "vulnerabilities": self.vulnerabilities,
         }
+ HEAD
         with open("vulnerability_report.json", "w") as f:
             json.dump(report, f, indent=4)
+
+        filename = f"vulnerability_report.{format}"
+        if format == 'json':
+            with open(filename, "w") as f:
+                json.dump(report, f, indent=4)
+        elif format == 'md':
+            with open(filename, "w") as f:
+                f.write(f"# Vulnerability Report for {self.url}\n\n")
+                for vuln in self.vulnerabilities:
+                    f.write(f"- {vuln}\n")
+        logging.info(f"Report generated: {filename}")
+ afbf2681f1fe7dadee858df486522398e998ff9c
 
 def chatbot():
     print("Chatbot is ready! Type 'exit' to quit.")
@@ -150,12 +243,20 @@ def chatbot():
                 "check_insecure_cookies": True,
                 "check_sensitive_paths": True,
                 "check_security_headers": True,
+ HEAD
+
+                "directory_brute_force": True,
+ afbf2681f1fe7dadee858df486522398e998ff9c
             }
             scanner = VulnerabilityScanner(url, options)
             results = asyncio.run(scanner.analyze_page())
             for result in results:
                 print("Bot:", result)
+HEAD
             scanner.generate_report()
+
+            scanner.generate_report(format='json')
+afbf2681f1fe7dadee858df486522398e998ff9c
             print("Bot: Vulnerability report generated as 'vulnerability_report.json'.")
         else:
             print("Bot: You can ask me to 'scan [URL]' to check for vulnerabilities.")
