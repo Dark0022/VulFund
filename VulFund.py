@@ -5,6 +5,7 @@ import logging
 from bs4 import BeautifulSoup
 import os
 import csv
+import argparse
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -27,14 +28,19 @@ class VulnerabilityScanner:
         return self.url.split("//")[-1].split("/")[0]
 
     async def fetch(self, session, url):
+        headers = {'User-Agent': self.options.get('user_agent', 'Mozilla/5.0')}
         try:
-            async with session.get(url) as response:
+            async with session.get(url, headers=headers) as response:
                 if response.status != 200:
                     raise FetchError(f"Failed to fetch {url}: HTTP {response.status}")
                 return await response.text(), response.cookies, response.headers
         except Exception as e:
             logging.error(f"Error fetching {url}: {e}")
             raise FetchError(f"Error fetching {url}")
+
+    async def fetch_with_limit(self, session, url, semaphore):
+        async with semaphore:
+            return await self.fetch(session, url)
 
     async def analyze_page(self):
         domain = self.get_domain()
@@ -44,8 +50,9 @@ class VulnerabilityScanner:
 
         async with aiohttp.ClientSession() as session:
             self.session = session
+            semaphore = asyncio.Semaphore(5)  # Limit to 5 concurrent requests
             try:
-                page_content, cookies, headers = await self.fetch(session, self.url)
+                page_content, cookies, headers = await self.fetch_with_limit(session, self.url, semaphore)
                 soup = BeautifulSoup(page_content, 'html.parser')
 
                 if self.options.get("check_xss"):
@@ -59,7 +66,7 @@ class VulnerabilityScanner:
                 if self.options.get("check_insecure_cookies"):
                     self.check_insecure_cookies(cookies)
                 if self.options.get("check_sensitive_paths"):
-                    await self.check_sensitive_paths(session)
+                    await self.check_sensitive_paths(session, semaphore)
                 if self.options.get("check_security_headers"):
                     self.check_security_headers(headers)
 
@@ -70,41 +77,55 @@ class VulnerabilityScanner:
 
     def check_xss(self, soup):
         if soup.find_all('script'):
-            self.vulnerabilities.append("[High] Potential XSS vulnerability: script tags found.")
+            message = "[High] Potential XSS vulnerability: script tags found."
+            logging.info(message)
+            self.vulnerabilities.append(message)
 
     def check_sql_injection(self, soup):
         forms = soup.find_all('form')
         for form in forms:
             action = form.get('action', '')
             if any(char in action for char in ["'", ";", "--"]):
-                self.vulnerabilities.append("[High] Potential SQL Injection risk in form action URL.")
+                message = "[High] Potential SQL Injection risk in form action URL."
+                logging.info(message)
+                self.vulnerabilities.append(message)
 
     def check_csrf(self, soup):
         forms = soup.find_all('form')
         for form in forms:
             if form.get('method', '').lower() == "post" and not form.find('input', {'name': 'csrf_token'}):
-                self.vulnerabilities.append("[Medium] Potential CSRF risk: missing CSRF token in POST form.")
+                message = "[Medium] Potential CSRF risk: missing CSRF token in POST form."
+                logging.info(message)
+                self.vulnerabilities.append(message)
 
     def check_open_redirect(self, soup):
         links = soup.find_all('a')
         if any("redirect" in link.get('href', '') for link in links):
-            self.vulnerabilities.append("[Medium] Potential Open Redirect found.")
+            message = "[Medium] Potential Open Redirect found."
+            logging.info(message)
+            self.vulnerabilities.append(message)
 
     def check_insecure_cookies(self, cookies):
         for cookie in cookies:
             if not cookie.get('HttpOnly'):
-                self.vulnerabilities.append(f"[Low] Cookie '{cookie.name}' is missing HttpOnly flag.")
+                message = f"[Low] Cookie '{cookie.name}' is missing HttpOnly flag."
+                logging.info(message)
+                self.vulnerabilities.append(message)
             if not cookie.get('Secure') and self.url.startswith("https"):
-                self.vulnerabilities.append(f"[Low] Cookie '{cookie.name}' is missing Secure flag.")
+                message = f"[Low] Cookie '{cookie.name}' is missing Secure flag."
+                logging.info(message)
+                self.vulnerabilities.append(message)
 
-    async def check_sensitive_paths(self, session):
+    async def check_sensitive_paths(self, session, semaphore):
         sensitive_paths = ['/admin', '/config', '/backup']
-        tasks = [self.fetch(session, self.url + path) for path in sensitive_paths]
+        tasks = [self.fetch_with_limit(session, self.url + path, semaphore) for path in sensitive_paths]
         responses = await asyncio.gather(*tasks)
 
         for path, (page_content, _, _) in zip(sensitive_paths, responses):
             if page_content:  # Assuming any non-empty response indicates a valid path
-                self.vulnerabilities.append(f"[High] Sensitive path found: {self.url + path}")
+                message = f"[High] Sensitive path found: {self.url + path}"
+                logging.info(message)
+                self.vulnerabilities.append(message)
 
     def check_security_headers(self, headers):
         missing_headers = []
@@ -114,7 +135,9 @@ class VulnerabilityScanner:
             missing_headers.append("Content Security Policy")
 
         if missing_headers:
-            self.vulnerabilities.append(f"[Medium] Missing headers: {', '.join(missing_headers)}.")
+            message = f"[Medium] Missing headers: {', '.join(missing_headers)}."
+            logging.info(message)
+            self.vulnerabilities.append(message)
 
     def generate_report(self, format='json'):
         report = {
@@ -144,9 +167,8 @@ def load_config(file_path):
     with open(file_path, 'r') as f:
         return json.load(f)
 
-def chatbot():
+def chatbot(options):
     print("Chatbot is ready! Type 'exit' to quit.")
-    options = load_config('config.json')  # Load options from config
     while True:
         user_input = input("You: ")
         if user_input.lower() == "exit":
@@ -159,9 +181,20 @@ def chatbot():
                 print("Bot:", result)
             scanner.generate_report(format='json')  # You can change format here
             print("Bot: Vulnerability report generated.")
+        elif user_input.lower().startswith("set user-agent "):
+            options['user_agent'] = user_input.split("set user-agent ", 1)[1].strip()
+            print("Bot: User-Agent updated.")
         else:
-            print("Bot: You can ask me to 'scan [URL]' to check for vulnerabilities.")
+            print("Bot: You can ask me to 'scan [URL]' to check for vulnerabilities or 'set user-agent [string]' to change the User-Agent.")
 
-# Run the chatbot
+def main():
+    parser = argparse.ArgumentParser(description="Vulnerability Scanner")
+    parser.add_argument('--config', type=str, default='config.json', help='Path to configuration file')
+    parser.add_argument('--format', type=str, choices=['json', 'md', 'csv'], default='json', help='Report format')
+    args = parser.parse_args()
+
+    options = load_config(args.config)
+    chatbot(options)
+
 if __name__ == "__main__":
-    chatbot()
+    main()
