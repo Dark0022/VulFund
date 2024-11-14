@@ -12,3 +12,5 @@ A simple command-line vulnerability scanner that checks web pages for common sec
 - **Sensitive Path Identification**: Checks for common sensitive paths (e.g., `/admin`, `/config`).
 - **Security Header Checks**: Ensures critical security headers are present.
 
+"This is a small update to trigger a commit!" 
+"This is a small update to trigger a commit!" 
